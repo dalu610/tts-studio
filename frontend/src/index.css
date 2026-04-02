@@ -1,3 +1,130 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-studio-bg text-slate-200 font-sans antialiased;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+
+  ::selection {
+    background: rgba(245, 158, 11, 0.3);
+    color: #FBBF24;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #0E1119;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #252B3D;
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #2F3650;
+  }
+
+  *:focus-visible {
+    outline: 2px solid rgba(6, 182, 212, 0.6);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  .studio-panel {
+    @apply bg-studio-surface border border-studio-border rounded-2xl;
+    box-shadow: 0 0 0 1px rgba(30, 35, 51, 0.8), 0 4px 32px rgba(0,0,0,0.5);
+  }
+
+  .studio-btn {
+    @apply relative overflow-hidden cursor-pointer select-none;
+    @apply px-5 py-2.5 rounded-xl font-sans font-semibold text-sm;
+    @apply transition-all duration-200 ease-out;
+    @apply active:scale-95;
+  }
+
+  .studio-btn-primary {
+    @apply studio-btn bg-amber-500 text-studio-bg font-bold;
+    @apply hover:bg-amber-400 hover:shadow-amber-glow;
+  }
+
+  .studio-btn-secondary {
+    @apply studio-btn bg-studio-card border border-studio-border-light text-slate-300;
+    @apply hover:bg-studio-card-hover hover:border-studio-border-light;
+    @apply active:border-cyan-500/50;
+  }
+
+  .studio-btn-danger {
+    @apply studio-btn bg-red-500/10 border border-red-500/30 text-red-400;
+    @apply hover:bg-red-500/20 hover:border-red-500/50;
+  }
+
+  .studio-input {
+    @apply w-full bg-studio-card border border-studio-border rounded-xl px-4 py-3;
+    @apply text-slate-200 placeholder:text-slate-600 font-sans text-sm;
+    @apply transition-all duration-200;
+    @apply focus:outline-none focus:border-cyan-500/60 focus:ring-2 focus:ring-cyan-500/20;
+  }
+
+  .studio-divider {
+    @apply border-t border-studio-border;
+  }
+
+  .text-gradient-amber {
+    @apply bg-gradient-to-r from-amber-400 to-amber-600 bg-clip-text text-transparent;
+  }
+
+  .glow-amber {
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.3);
+  }
+
+  .glow-cyan {
+    box-shadow: 0 0 20px rgba(6, 182, 212, 0.3);
+  }
+}
+
+@layer utilities {
+  .animation-delay-100 { animation-delay: 100ms; }
+  .animation-delay-200 { animation-delay: 200ms; }
+  .animation-delay-300 { animation-delay: 300ms; }
+  .animation-delay-400 { animation-delay: 400ms; }
+  .animation-delay-500 { animation-delay: 500ms; }
+
+  .opacity-0-initial { opacity: 0; }
+
+  .noise-overlay {
+    position: relative;
+  }
+
+  .noise-overlay::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E");
+    pointer-events: none;
+    border-radius: inherit;
+  }
+}

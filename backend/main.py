@@ -17,6 +17,7 @@ import numpy as np
 import io
 import httpx
 import asyncio
+from zai import ZhipuAiClient
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -45,31 +46,32 @@ client = openai.Client(
 # Simple cache for text variants
 variants_cache = {}
 
-# Ollama configuration
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3:latest")
+# GLM-4.7-Flash configuration
+GLM_API_KEY = os.getenv("GLM_API_KEY")
+GLM_MODEL = os.getenv("GLM_MODEL", "glm-4.7-flash")
 
-async def call_ollama(prompt: str) -> str:
-    """Call Ollama API for text generation"""
+# Initialize GLM client (using official Zhipu AI SDK)
+glm_client = ZhipuAiClient(api_key=GLM_API_KEY) if GLM_API_KEY else None
+
+async def call_glm(prompt: str) -> str:
+    """Call GLM-4.7-Flash API for text generation"""
+    if not glm_client:
+        raise ValueError("GLM_API_KEY not configured. Please set GLM_API_KEY environment variable.")
+
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{OLLAMA_HOST}/api/generate",
-                json={
-                    "model": OLLAMA_MODEL,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.7,
-                        "num_predict": 512,
-                    }
-                }
-            )
-            response.raise_for_status()
-            result = response.json()
-            return result.get("response", "")
+        # Use asyncio.to_thread to avoid blocking the event loop
+        response = await asyncio.to_thread(
+            glm_client.chat.completions.create,
+            model=GLM_MODEL,
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=2048,
+        )
+        return response.choices[0].message.content or ""
     except Exception as e:
-        logger.error(f"Ollama API error: {e}")
+        logger.error(f"GLM API error: {e}")
         raise
 
 def generate_simple_variants(seed_text, count=5):
@@ -238,7 +240,7 @@ async def root():
 @app.post("/api/expand-text")
 async def expand_text(request: TextExpansionRequest):
     """
-    Generate text variants using local Ollama model with caching.
+    Generate text variants using GLM-4.7-Flash model with caching.
     First variant is the seed text itself, followed by AI-generated variants.
     """
     cache_key = request.seed_text.strip()
@@ -252,7 +254,7 @@ async def expand_text(request: TextExpansionRequest):
 
     # Start with seed text as first variant
     variants = [request.seed_text]
-    logger.info(f"Generating {request.count - 1} additional variants using Ollama ({OLLAMA_MODEL}) for: {request.seed_text[:50]}...")
+    logger.info(f"Generating {request.count - 1} additional variants using GLM ({GLM_MODEL}) for: {request.seed_text[:50]}...")
 
     # Calculate how many more variants we need to generate
     additional_count = max(0, request.count - 1)
@@ -288,10 +290,10 @@ TTS训练需要同一句话的多种自然说法，但意思必须完全一致�
 变体："""
 
     try:
-        # Call Ollama API
-        content = await call_ollama(prompt)
+        # Call GLM API
+        content = await call_glm(prompt)
 
-        logger.info(f"Ollama response received, length: {len(content)}")
+        logger.info(f"GLM response received, length: {len(content)}")
 
         # Extract actual variants from the response
         for line in content.split("\n"):
@@ -340,8 +342,8 @@ TTS训练需要同一句话的多种自然说法，但意思必须完全一致�
         logger.info(f"Parsed {len(variants) - 1} additional variants, total: {len(variants)}")
 
     except Exception as e:
-        logger.error(f"Error calling Ollama: {e}")
-        # Keep seed text even if Ollama fails
+        logger.error(f"Error calling GLM: {e}")
+        # Keep seed text even if GLM fails
 
     # If we got good variants (seed + at least 2 more), cache them
     if len(variants) >= 3:

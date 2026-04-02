@@ -1,74 +1,78 @@
 import { useState, useRef } from 'react';
-import { Wand2, FileSpreadsheet, Upload, Type } from 'lucide-react';
+import { Wand2, Upload, FileSpreadsheet, Sparkles } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import * as XLSX from 'xlsx';
 
+const TABS = [
+  { id: 'text', label: '话术变体', icon: Sparkles },
+  { id: 'excel', label: 'Excel 导入', icon: FileSpreadsheet },
+];
+
 export default function InputZone({ onGenerate, isLoading, onExcelUpload }) {
+  const [activeTab, setActiveTab] = useState('text');
   const [seedText, setSeedText] = useState('');
-  const [activeTab, setActiveTab] = useState('text'); // 'text' | 'excel'
   const [excelFileName, setExcelFileName] = useState('');
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [isDraggingInput, setIsDraggingInput] = useState(false);
   const fileInputRef = useRef(null);
 
+  const charCount = seedText.length;
+  const isValid = seedText.trim().length > 0;
+
   const handleGenerate = () => {
-    if (seedText.trim()) {
-      onGenerate(seedText.trim());
+    if (!isValid) return;
+    onGenerate(seedText.trim());
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && isValid) {
+      handleGenerate();
     }
   };
 
   const handleFileChange = (e) => {
-    const file = e.target.files[0];
+    const file = e.target.files?.[0];
     if (!file) return;
+    processFile(file);
+  };
 
+  const processFile = (file) => {
     setExcelFileName(file.name);
-
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
         const data = new Uint8Array(event.target.result);
         const workbook = XLSX.read(data, { type: 'array' });
         const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-
-        // Parse with headers to get column names
         const jsonData = XLSX.utils.sheet_to_json(firstSheet);
 
-        // Find "话术库" column
         let texts = [];
         if (jsonData.length > 0) {
           const firstRow = jsonData[0];
-          const columnKey = Object.keys(firstRow).find(key =>
-            key.trim() === '话术库' || key.trim().includes('话术')
+          const columnKey = Object.keys(firstRow).find(
+            (k) => k.trim() === '话术库' || k.trim().includes('话术')
           );
-
           if (columnKey) {
-            // Extract from "话术库" column
             texts = jsonData
-              .map(row => row[columnKey])
-              .filter(text => text && String(text).trim() !== '' && String(text).trim() !== columnKey)
-              .map(text => String(text).trim());
+              .map((row) => row[columnKey])
+              .filter((t) => t && String(t).trim() && String(t).trim() !== columnKey)
+              .map((t) => String(t).trim());
           } else {
-            // Fallback: try to find any column that contains text data
             const allKeys = Object.keys(firstRow);
             for (const key of allKeys) {
-              const columnData = jsonData
-                .map(row => row[key])
-                .filter(text => text && String(text).trim() !== '');
-              if (columnData.length > texts.length) {
-                texts = columnData.map(text => String(text).trim());
-              }
+              const col = jsonData.map((row) => row[key]).filter((t) => t && String(t).trim());
+              if (col.length > texts.length) texts = col.map((t) => String(t).trim());
             }
           }
         }
 
         if (texts.length === 0) {
-          alert('Excel 文件中没有找到有效的文本数据，请确保包含"话术库"列');
+          alert('Excel 中未找到有效文本，请确保包含"话术库"列');
           return;
         }
-
-        if (onExcelUpload) {
-          onExcelUpload(texts);
-        }
-      } catch (error) {
-        console.error('Excel parsing error:', error);
-        alert('Excel 文件解析失败，请检查文件格式');
+        onExcelUpload(texts);
+      } catch (err) {
+        alert('Excel 解析失败，请检查文件格式');
       }
     };
     reader.readAsArrayBuffer(file);
@@ -76,108 +80,216 @@ export default function InputZone({ onGenerate, isLoading, onExcelUpload }) {
 
   const handleDrop = (e) => {
     e.preventDefault();
-    const file = e.dataTransfer.files[0];
+    setIsDragOver(false);
+    const file = e.dataTransfer.files?.[0];
     if (file && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls'))) {
-      fileInputRef.current.files = e.dataTransfer.files;
-      handleFileChange({ target: { files: e.dataTransfer.files } });
-    } else {
-      alert('请上传 Excel 文件 (.xlsx 或 .xls)');
+      processFile(file);
     }
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
   };
 
   return (
     <div className="h-full flex flex-col">
       {/* Tab Navigation */}
-      <div className="flex gap-2 mb-4">
-        <button
-          onClick={() => setActiveTab('text')}
-          className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-            activeTab === 'text'
-              ? 'bg-blue-500 text-white'
-              : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
-          }`}
-        >
-          <Type className="w-4 h-4" />
-          <span>话术变体</span>
-        </button>
-        <button
-          onClick={() => setActiveTab('excel')}
-          className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-            activeTab === 'excel'
-              ? 'bg-blue-500 text-white'
-              : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
-          }`}
-        >
-          <FileSpreadsheet className="w-4 h-4" />
-          <span>Excel 导入</span>
-        </button>
+      <div className="flex gap-1.5 bg-studio-bg rounded-xl p-1 mb-5 border border-studio-border">
+        {TABS.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => setActiveTab(id)}
+            className={`flex-1 relative flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+              activeTab === id
+                ? 'bg-studio-card text-white shadow-lg'
+                : 'text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            <Icon className="w-3.5 h-3.5" />
+            {label}
+            {activeTab === id && (
+              <motion.div
+                layoutId="tab-indicator"
+                className="absolute inset-0 bg-gradient-to-r from-amber-500/10 to-cyan-500/10 rounded-lg border border-amber-500/20 -z-10"
+                transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+              />
+            )}
+          </button>
+        ))}
       </div>
 
-      {/* Text Input Tab */}
-      {activeTab === 'text' && (
-        <div className="flex-1 flex flex-col">
-          <h2 className="text-lg font-semibold mb-3 text-gray-800 dark:text-gray-200">种子话术输入</h2>
-          <textarea
-            value={seedText}
-            onChange={(e) => setSeedText(e.target.value)}
-            placeholder="输入种子话术，例如：你好，欢迎使用我们的产品"
-            className="flex-1 w-full p-4 border border-gray-300 dark:border-gray-600 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:text-white mb-4"
-          />
-          <button
-            onClick={handleGenerate}
-            disabled={isLoading || !seedText.trim()}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors"
+      {/* Tab Content */}
+      <AnimatePresence mode="wait">
+        {activeTab === 'text' && (
+          <motion.div
+            key="text-tab"
+            initial={{ opacity: 0, x: -12 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 12 }}
+            transition={{ duration: 0.2 }}
+            className="flex-1 flex flex-col min-h-0"
           >
-            <Wand2 className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
-            <span>{isLoading ? '生成中...' : '生成变体'}</span>
-          </button>
-        </div>
-      )}
+            {/* Section label */}
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-1 h-4 bg-gradient-to-b from-amber-500 to-amber-600 rounded-full" />
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest">
+                种子话术
+              </span>
+            </div>
 
-      {/* Excel Upload Tab */}
-      {activeTab === 'excel' && (
-        <div className="flex-1 flex flex-col">
-          <h2 className="text-lg font-semibold mb-3 text-gray-800 dark:text-gray-200">Excel 导入</h2>
-          <div
-            onDrop={handleDrop}
-            onDragOver={handleDragOver}
-            className="flex-1 flex flex-col items-center justify-center p-6 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".xlsx,.xls"
-              onChange={handleFileChange}
-              className="hidden"
-            />
-            <Upload className="w-12 h-12 text-gray-400 mb-3" />
-            <p className="text-sm text-gray-600 dark:text-gray-400 text-center mb-1">
-              点击或拖拽上传 Excel 文件
-            </p>
-            <p className="text-xs text-gray-400 dark:text-gray-500 text-center">
-              支持 .xlsx, .xls 格式，将提取"话术库"列的数据
-            </p>
-            {excelFileName && (
-              <div className="mt-4 px-3 py-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
-                <p className="text-sm text-green-700 dark:text-green-300 flex items-center gap-2">
-                  <FileSpreadsheet className="w-4 h-4" />
-                  {excelFileName}
-                </p>
+            {/* Textarea */}
+            <div className="relative flex-1 flex flex-col mb-4">
+              <textarea
+                value={seedText}
+                onChange={(e) => setSeedText(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onFocus={() => setIsDraggingInput(true)}
+                onBlur={() => setIsDraggingInput(false)}
+                placeholder="输入你想扩展的种子话术，LLM 将生成 15 条风格相似但句式各异的变体..."
+                className="flex-1 studio-input resize-none rounded-xl pt-4 pb-10 text-sm leading-relaxed"
+                style={{ minHeight: '160px' }}
+              />
+              {/* Character counter */}
+              <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                <div
+                  className={`h-1.5 rounded-full transition-all duration-300 ${
+                    charCount === 0
+                      ? 'w-0'
+                      : charCount < 100
+                      ? 'w-8 bg-emerald-500/60'
+                      : charCount < 300
+                      ? 'w-12 bg-amber-500/60'
+                      : 'w-16 bg-red-500/60'
+                  }`}
+                />
+                <span
+                  className={`font-mono text-[10px] ${
+                    charCount === 0 ? 'text-slate-600' : charCount < 100 ? 'text-emerald-500/70' : charCount < 300 ? 'text-amber-500/70' : 'text-red-500/70'
+                  }`}
+                >
+                  {charCount}
+                </span>
               </div>
-            )}
-          </div>
-          <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-            <p className="text-xs text-blue-700 dark:text-blue-300">
-              <strong>提示：</strong>将提取 Excel 文件中"话术库"列的每一行作为录音文本
+              {/* Focus glow border */}
+              <div
+                className={`absolute inset-0 rounded-xl transition-all duration-300 pointer-events-none ${
+                  isDraggingInput
+                    ? 'ring-2 ring-cyan-500/40 ring-offset-0'
+                    : ''
+                }`}
+              />
+            </div>
+
+            {/* Generate Button */}
+            <button
+              onClick={handleGenerate}
+              disabled={!isValid || isLoading}
+              className={`group relative w-full py-3.5 rounded-xl font-semibold text-sm flex items-center justify-center gap-2.5 transition-all duration-200 ${
+                isValid && !isLoading
+                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-studio-bg hover:from-amber-400 hover:to-amber-500 shadow-lg hover:shadow-amber-500/25 active:scale-[0.98]'
+                  : 'bg-studio-card border border-studio-border text-slate-600 cursor-not-allowed'
+              }`}
+            >
+              {isLoading ? (
+                <>
+                  <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeDasharray="32" strokeDashoffset="12" strokeLinecap="round" />
+                  </svg>
+                  <span>正在生成变体...</span>
+                </>
+              ) : (
+                <>
+                  <Wand2 className="w-4 h-4 transition-transform group-hover:rotate-12" />
+                  <span>生成 15 条变体</span>
+                  <kbd className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-black/20 font-mono">
+                    ⌘↵
+                  </kbd>
+                </>
+              )}
+            </button>
+
+            {/* Tip */}
+            <p className="mt-3 text-[11px] text-slate-600 text-center">
+              基于种子话术生成 15 条适合 TTS 训练的表达变体
             </p>
-          </div>
-        </div>
-      )}
+          </motion.div>
+        )}
+
+        {activeTab === 'excel' && (
+          <motion.div
+            key="excel-tab"
+            initial={{ opacity: 0, x: 12 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -12 }}
+            transition={{ duration: 0.2 }}
+            className="flex-1 flex flex-col min-h-0"
+          >
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-1 h-4 bg-gradient-to-b from-cyan-500 to-cyan-600 rounded-full" />
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest">
+                Excel 导入
+              </span>
+            </div>
+
+            {/* Drop Zone */}
+            <div
+              onDrop={handleDrop}
+              onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+              onDragLeave={() => setIsDragOver(false)}
+              onClick={() => fileInputRef.current?.click()}
+              className={`flex-1 flex flex-col items-center justify-center rounded-xl border-2 border-dashed transition-all duration-200 cursor-pointer min-h-[180px] ${
+                isDragOver
+                  ? 'border-cyan-500/60 bg-cyan-500/5'
+                  : excelFileName
+                  ? 'border-emerald-500/40 bg-emerald-500/5'
+                  : 'border-studio-border hover:border-studio-border-light hover:bg-studio-card/50'
+              }`}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+
+              {excelFileName ? (
+                <motion.div
+                  initial={{ scale: 0.9, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  className="flex flex-col items-center"
+                >
+                  <div className="w-14 h-14 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mb-3">
+                    <FileSpreadsheet className="w-7 h-7 text-emerald-400" />
+                  </div>
+                  <p className="text-sm font-medium text-emerald-300 mb-1">{excelFileName}</p>
+                  <p className="text-xs text-emerald-500/60">点击或拖拽替换文件</p>
+                </motion.div>
+              ) : (
+                <div className="flex flex-col items-center">
+                  <div
+                    className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-3 transition-colors ${
+                      isDragOver
+                        ? 'bg-cyan-500/15 border border-cyan-500/30'
+                        : 'bg-studio-card border border-studio-border'
+                    }`}
+                  >
+                    <Upload className={`w-6 h-6 ${isDragOver ? 'text-cyan-400' : 'text-slate-500'}`} />
+                  </div>
+                  <p className="text-sm text-slate-300 mb-1">
+                    {isDragOver ? '释放以上传文件' : '点击或拖拽上传 Excel'}
+                  </p>
+                  <p className="text-xs text-slate-600">支持 .xlsx / .xls，自动提取"话术库"列</p>
+                </div>
+              )}
+            </div>
+
+            {/* Info */}
+            <div className="mt-4 p-3 rounded-xl bg-studio-card border border-studio-border">
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                <span className="text-amber-500/80 font-medium">提示：</span>
+                Excel 文件需包含"话术库"列，每行文本将作为一条独立的录音任务导入工作区。
+              </p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

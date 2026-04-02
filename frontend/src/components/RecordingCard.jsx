@@ -1,16 +1,92 @@
-import { useState, useRef, useEffect } from 'react';
-import { Mic, Square, Play, Trash2, CheckCircle, Edit2, X, AlertTriangle, Check } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { Mic, Square, Play, Pause, Trash2, CheckCircle, Edit2, X, AlertTriangle, Check } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { convertToWav } from '../utils/audioUtils';
 
-export default function RecordingCard({ text, index, onRecordingComplete, onTextChange, onDelete, canEdit = true }) {
+// Real-time waveform visualizer during recording
+function WaveformVisualizer({ analyser, isRecording }) {
+  const canvasRef = useRef(null);
+  const rafRef = useRef(null);
+
+  useEffect(() => {
+    if (!analyser || !isRecording) {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+
+    const draw = () => {
+      if (!isRecording) return;
+      rafRef.current = requestAnimationFrame(draw);
+      analyser.getByteTimeDomainData(dataArray);
+
+      ctx.fillStyle = 'rgba(9, 11, 17, 0.8)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#F59E0B';
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = '#F59E0B';
+      ctx.beginPath();
+
+      const sliceWidth = canvas.width / bufferLength;
+      let x = 0;
+
+      for (let i = 0; i < bufferLength; i++) {
+        const v = dataArray[i] / 128.0;
+        const y = (v * canvas.height) / 2;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+        x += sliceWidth;
+      }
+
+      ctx.lineTo(canvas.width, canvas.height / 2);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    };
+
+    draw();
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [analyser, isRecording]);
+
+  if (!isRecording) return null;
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={200}
+      height={40}
+      className="rounded-lg opacity-80"
+    />
+  );
+}
+
+export default function RecordingCard({
+  text,
+  index,
+  isRecorded,
+  onRecordingComplete,
+  onTextChange,
+  onDelete,
+  canEdit = true,
+}) {
   const [isRecording, setIsRecording] = useState(false);
-  const [hasRecording, setHasRecording] = useState(false);
+  const [hasRecording, setHasRecording] = useState(isRecorded || false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [audioUrl, setAudioUrl] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedText, setEditedText] = useState(text);
-  const [qualityCheck, setQualityCheck] = useState(null); // { passed: bool, issues: [] }
+  const [qualityCheck, setQualityCheck] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -18,7 +94,6 @@ export default function RecordingCard({ text, index, onRecordingComplete, onText
   const audioRef = useRef(null);
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
-  const silenceTimerRef = useRef(null);
   const streamRef = useRef(null);
   const isRecordingRef = useRef(false);
 
@@ -26,242 +101,117 @@ export default function RecordingCard({ text, index, onRecordingComplete, onText
     setEditedText(text);
   }, [text]);
 
+  const formatTime = (secs) => `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
+
   const handleStartRecording = async () => {
     try {
-      // Stop any existing recording
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
-
-      // Clear any existing timer
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-
-      // Clear silence detection timer
-      if (silenceTimerRef.current) {
-        clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = null;
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (audioContextRef.current) {
+        try { audioContextRef.current.close(); } catch {}
+        audioContextRef.current = null;
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
-      mediaRecorderRef.current = new MediaRecorder(stream);
 
-      mediaRecorderRef.current.ondataavailable = (event) => {
-        audioChunksRef.current.push(event.data);
+      // Setup audio analysis
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      analyserRef.current = audioContextRef.current.createAnalyser();
+      analyserRef.current.fftSize = 512;
+      const source = audioContextRef.current.createMediaStreamSource(stream);
+      source.connect(analyserRef.current);
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
 
-      mediaRecorderRef.current.onstop = async () => {
-        console.log('Recording stopped, processing...');
-
-        // Stop all tracks
-        stream.getTracks().forEach((track) => track.stop());
-
-        // Convert to WAV format
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        const wavBlob = await convertToWav(audioBlob);
-
-        console.log('Audio converted to WAV, size:', wavBlob.size);
-
-        // First save the audio
-        const formData = new FormData();
-        formData.append('file', wavBlob, `recording_${index}.wav`);
-        formData.append('text', editedText);
-        formData.append('index', index);
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        setIsUploading(true);
 
         try {
-          // Upload audio
-          console.log('Uploading audio...');
-          const uploadResponse = await fetch('/api/upload-audio', {
-            method: 'POST',
-            body: formData,
-          });
+          const webmBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          const wavBlob = await convertToWav(webmBlob);
 
-          if (!uploadResponse.ok) {
-            throw new Error('Upload failed');
-          }
+          const formData = new FormData();
+          formData.append('file', wavBlob, `recording_${index}.wav`);
+          formData.append('text', editedText);
+          formData.append('index', index);
 
-          const uploadResponseData = await uploadResponse.json();
+          const uploadRes = await fetch('/api/upload-audio', { method: 'POST', body: formData });
 
-          console.log('Upload response data:', uploadResponseData);
+          if (!uploadRes.ok) throw new Error('Upload failed');
+          const uploadData = await uploadRes.json();
 
-          // Store the filename for later use
-          const savedFilename = uploadResponseData.filename;
+          const url = URL.createObjectURL(wavBlob);
+          setAudioUrl(url);
+          setHasRecording(true);
+          setShowSuccess(true);
+          setTimeout(() => setShowSuccess(false), 3000);
+          onRecordingComplete?.(index, true);
 
-          if (!savedFilename) {
-            console.error('No filename in upload response');
-            alert('上传失败，请重试');
-            return;
-          }
-
-          // Then check quality
-          const audioArrayBuffer = await wavBlob.arrayBuffer();
-          const audioBase64 = btoa(
-            new Uint8Array(audioArrayBuffer).reduce((data, byte) => {
-              return data + String.fromCharCode(byte);
-            }, '')
-          );
-
-          console.log('Checking quality...');
-          const qualityResponse = await fetch('/api/check-quality', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              audio_data: audioBase64,
-              text: editedText,
-            }),
-          });
-
-          if (qualityResponse.ok) {
-            const qualityData = await qualityResponse.json();
-            console.log('Quality check data:', qualityData);
-            setQualityCheck(qualityData);
-
-            // Only set as recorded if quality check passed
-            if (qualityData.passed) {
-              const url = URL.createObjectURL(wavBlob);
-              setAudioUrl(url);
-              setHasRecording(true);
-              onRecordingComplete?.(index, true);
-            } else {
-              // Delete the uploaded file if quality check failed
-              console.log('Deleting file due to failed quality check:', savedFilename);
-              await fetch('/api/delete-audio', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body: `filename=${encodeURIComponent(savedFilename)}`,
-              });
-              // Reset states so user can re-record
-              setHasRecording(false);
-              setAudioUrl(null);
-              // Keep qualityCheck to show error message
-            }
-          } else {
-            console.error('Quality check request failed');
-            setQualityCheck({
-              passed: false,
-              issues: ['质量检查请求失败，请检查网络连接后重试']
+          // Quality check
+          const ab = await wavBlob.arrayBuffer();
+          const b64 = btoa(new Uint8Array(ab).reduce((d, b) => d + String.fromCharCode(b), ''));
+          try {
+            const qRes = await fetch('/api/check-quality', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ audio_data: b64, text: editedText }),
             });
-          }
-        } catch (error) {
-          console.error('Upload or quality check failed:', error);
-          setQualityCheck({
-            passed: false,
-            issues: [`上传或质量检查失败: ${error.message}`]
-          });
+            if (qRes.ok) setQualityCheck(await qRes.json());
+          } catch {}
+        } catch (err) {
+          alert(`录音失败: ${err.message}`);
+        } finally {
+          setIsUploading(false);
+          audioChunksRef.current = [];
         }
-
-        audioChunksRef.current = [];
       };
 
-      mediaRecorderRef.current.start();
+      // Silence auto-stop
+      let silenceStart = null;
+      let recordingStart = Date.now();
+      const silenceDetect = () => {
+        if (!isRecordingRef.current || !analyserRef.current) return;
+        const buf = new Uint8Array(analyserRef.current.frequencyBinCount);
+        analyserRef.current.getByteTimeDomainData(buf);
+        const avg = buf.reduce((a, b) => a + Math.abs(b - 128), 0) / buf.length;
+        const now = Date.now();
+        if (now - recordingStart > 2000) {
+          if (avg < 3) {
+            if (!silenceStart) silenceStart = now;
+            else if (now - silenceStart > 1500) { handleStopRecording(); return; }
+          } else silenceStart = null;
+        }
+        if (isRecordingRef.current) requestAnimationFrame(silenceDetect);
+      };
+      setTimeout(() => { if (isRecordingRef.current) requestAnimationFrame(silenceDetect); }, 200);
+
+      mediaRecorder.start();
       isRecordingRef.current = true;
       setIsRecording(true);
       setHasRecording(false);
       setQualityCheck(null);
+      setRecordingTime(0);
 
-      // Start timer
-      timerRef.current = setInterval(() => {
-        setRecordingTime((prev) => prev + 1);
-      }, 1000);
-
-      // Setup real-time silence detection using Web Audio API
-      try {
-        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-        analyserRef.current = audioContextRef.current.createAnalyser();
-        analyserRef.current.fftSize = 256;
-
-        const source = audioContextRef.current.createMediaStreamSource(stream);
-        source.connect(analyserRef.current);
-
-        const bufferLength = analyserRef.current.frequencyBinCount;
-        const dataArray = new Uint8Array(bufferLength);
-
-        let silenceStartTime = null;
-        const SILENCE_THRESHOLD = 5; // Volume threshold (0-255), lower = more sensitive
-        const SILENCE_DURATION = 1500; // Silence duration in ms before auto-stop
-        const MIN_RECORDING_TIME = 2000; // Minimum recording time before allowing auto-stop
-        let recordingStartTime = Date.now();
-
-        const detectSilence = () => {
-          if (!isRecordingRef.current || !analyserRef.current) return;
-
-          analyserRef.current.getByteFrequencyData(dataArray);
-
-          // Calculate average volume
-          let sum = 0;
-          for (let i = 0; i < bufferLength; i++) {
-            sum += dataArray[i];
-          }
-          const average = sum / bufferLength;
-
-          const now = Date.now();
-          const recordingDuration = now - recordingStartTime;
-
-          // Debug logging
-          if (recordingDuration > MIN_RECORDING_TIME && recordingDuration % 500 < 50) {
-            console.log(`[Recording ${index}] Volume: ${average.toFixed(1)}, threshold: ${SILENCE_THRESHOLD}`);
-          }
-
-          // Only check for silence after minimum recording time
-          if (recordingDuration > MIN_RECORDING_TIME) {
-            if (average < SILENCE_THRESHOLD) {
-              if (!silenceStartTime) {
-                silenceStartTime = now;
-                console.log(`[Recording ${index}] Silence started, volume: ${average.toFixed(1)}`);
-              } else if (now - silenceStartTime > SILENCE_DURATION) {
-                // Silence detected for long enough, auto-stop recording
-                console.log(`[Recording ${index}] Silence detected for ${SILENCE_DURATION}ms, auto-stopping`);
-                handleStopRecording();
-                return;
-              }
-            } else {
-              if (silenceStartTime) {
-                console.log(`[Recording ${index}] Silence ended, volume: ${average.toFixed(1)}`);
-              }
-              silenceStartTime = null;
-            }
-          }
-
-          // Continue detection
-          requestAnimationFrame(detectSilence);
-        };
-
-        // Start silence detection after a short delay
-        setTimeout(() => {
-          if (isRecordingRef.current) {
-            detectSilence();
-          }
-        }, 100);
-
-      } catch (audioError) {
-        console.error('Error setting up audio analysis:', audioError);
-        // Continue without silence detection
-      }
-
-    } catch (error) {
-      console.error('Error accessing microphone:', error);
-      alert('无法访问麦克风，请确保已授予权限');
+      timerRef.current = setInterval(() => setRecordingTime((p) => p + 1), 1000);
+    } catch (err) {
+      alert('无法访问麦克风，请检查权限设置');
     }
   };
 
-  const handleStopRecording = () => {
-    console.log('Stop recording clicked, mediaRecorder state:', mediaRecorderRef.current?.state);
-
-    // Clear silence detection timer
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-
-    // Clean up audio context
-    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      audioContextRef.current.close();
+  const handleStopRecording = useCallback(() => {
+    if (silenceTimerRef) {}
+    if (audioContextRef.current) {
+      try { audioContextRef.current.close(); } catch {}
       audioContextRef.current = null;
     }
     analyserRef.current = null;
@@ -270,233 +220,270 @@ export default function RecordingCard({ text, index, onRecordingComplete, onText
       mediaRecorderRef.current.stop();
       isRecordingRef.current = false;
       setIsRecording(false);
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
       setRecordingTime(0);
-      console.log('Recording stopped');
     }
-  };
+  }, []);
 
-  const handlePlay = () => {
-    if (audioRef.current) {
-      if (isPlaying) {
-        audioRef.current.pause();
-        setIsPlaying(false);
-      } else {
-        audioRef.current.play();
-        setIsPlaying(true);
-      }
-    }
-  };
-
-  const handleDeleteRecording = async () => {
-    if (audioUrl) {
-      URL.revokeObjectURL(audioUrl);
-      setAudioUrl(null);
-      setHasRecording(false);
-      setQualityCheck(null);
-      onRecordingComplete?.(index, false);
-    }
-  };
-
-  const handleDeleteCard = () => {
-    onDelete?.(index);
-  };
-
-  const handleEdit = () => {
-    setIsEditing(true);
-  };
-
-  const handleSaveEdit = () => {
-    onTextChange?.(index, editedText);
-    setIsEditing(false);
-  };
-
-  const handleCancelEdit = () => {
-    setEditedText(text);
-    setIsEditing(false);
-  };
-
-  const handleAudioEnded = () => {
-    setIsPlaying(false);
-  };
+  const silenceTimerRef = useRef(null);
 
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       if (audioUrl) URL.revokeObjectURL(audioUrl);
-      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close();
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
+      if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
+      if (audioContextRef.current) try { audioContextRef.current.close(); } catch {}
     };
-  }, [audioUrl]);
+  }, []);
 
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  const handlePlay = () => {
+    if (!audioRef.current) return;
+    if (isPlaying) { audioRef.current.pause(); setIsPlaying(false); }
+    else { audioRef.current.play(); setIsPlaying(true); }
+  };
+
+  const handleDeleteRecording = async () => {
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    setAudioUrl(null);
+    setHasRecording(false);
+    setQualityCheck(null);
+    onRecordingComplete?.(index, false);
+  };
+
+  const cardVariants = {
+    hidden: { opacity: 0, y: 12 },
+    visible: (i) => ({
+      opacity: 1,
+      y: 0,
+      transition: { delay: i * 0.04, duration: 0.35, ease: 'easeOut' },
+    }),
   };
 
   return (
-    <div className={`border rounded-lg p-4 transition-all ${
-      hasRecording ? 'border-green-500 bg-green-50 dark:bg-green-950/20' : 'border-gray-200 dark:border-gray-700'
-    }`}>
-      {/* Header */}
-      <div className="flex items-start justify-between mb-3">
-        {isEditing ? (
-          <input
-            type="text"
-            value={editedText}
-            onChange={(e) => setEditedText(e.target.value)}
-            className="flex-1 mr-2 px-2 py-1 border border-blue-500 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:text-white"
-            autoFocus
-          />
-        ) : (
-          <p className="text-sm text-gray-700 dark:text-gray-300 flex-1 pr-2">{editedText}</p>
-        )}
-        <div className="flex items-center gap-1">
-          {/* Quality Check Result */}
-          {qualityCheck && (
-            <div className={`flex items-center gap-1 px-2 py-1 rounded ${
-              qualityCheck.passed ? 'bg-green-100 dark:bg-green-900/30' : 'bg-red-100 dark:bg-red-900/30'
-            }`}>
-              {qualityCheck.passed ? (
-                <>
-                  <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400" />
-                  <span className="text-xs font-medium text-green-700 dark:text-green-300">质量合格</span>
-                </>
-              ) : (
-                <>
-                  <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" />
-                  <span className="text-xs font-medium text-red-700 dark:text-red-300">质量不合格</span>
-                </>
-              )}
-            </div>
-          )}
-          {hasRecording && !qualityCheck && <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0" />}
-          {canEdit && !isEditing && onDelete && (
-            <button
-              onClick={handleDeleteCard}
-              className="text-gray-400 hover:text-red-500 transition-colors"
-              title="删除话术"
+    <motion.div
+      custom={index}
+      variants={cardVariants}
+      initial="hidden"
+      animate="visible"
+      className={`group relative rounded-xl border transition-all duration-300 overflow-hidden ${
+        hasRecording
+          ? 'border-emerald-500/30 bg-emerald-500/[0.03]'
+          : 'border-studio-border bg-studio-card hover:border-studio-border-light hover:bg-studio-card-hover'
+      }`}
+    >
+      {/* Top accent line */}
+      <div
+        className={`absolute top-0 left-0 right-0 h-px transition-all duration-500 ${
+          isRecording
+            ? 'bg-gradient-to-r from-transparent via-red-500 to-transparent animate-pulse'
+            : hasRecording
+            ? 'bg-gradient-to-r from-transparent via-emerald-500/60 to-transparent'
+            : 'bg-transparent'
+        }`}
+      />
+
+      <div className="p-4">
+        {/* Card header row */}
+        <div className="flex items-start gap-3 mb-3">
+          {/* Index badge */}
+          <div
+            className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-xs font-mono font-medium transition-colors ${
+              hasRecording
+                ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                : isRecording
+                ? 'bg-red-500/15 text-red-400 border border-red-500/30 animate-pulse'
+                : 'bg-studio-bg text-slate-500 border border-studio-border'
+            }`}
+          >
+            {String(index + 1).padStart(2, '0')}
+          </div>
+
+          {/* Text */}
+          <div className="flex-1 min-w-0">
+            {isEditing ? (
+              <input
+                value={editedText}
+                onChange={(e) => setEditedText(e.target.value)}
+                className="w-full bg-studio-bg border border-cyan-500/50 rounded-lg px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 font-sans"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { onTextChange?.(index, editedText); setIsEditing(false); }
+                  if (e.key === 'Escape') { setEditedText(text); setIsEditing(false); }
+                }}
+              />
+            ) : (
+              <p className={`text-sm leading-relaxed ${hasRecording ? 'text-slate-300' : 'text-slate-300'}`}>
+                {editedText}
+              </p>
+            )}
+          </div>
+
+          {/* Status badges */}
+          <div className="flex-shrink-0 flex items-center gap-2">
+            {isUploading && (
+              <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30">
+                <svg className="w-3 h-3 animate-spin text-amber-400" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeDasharray="32" strokeDashoffset="12" strokeLinecap="round" />
+                </svg>
+                <span className="text-xs text-amber-400 font-medium">上传中</span>
+              </div>
+            )}
+            {showSuccess && (
+              <motion.div
+                initial={{ scale: 0.8, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.8, opacity: 0 }}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/40"
+              >
+                <Check className="w-3 h-3 text-emerald-400" />
+                <span className="text-xs text-emerald-400 font-medium">已保存</span>
+              </motion.div>
+            )}
+            {hasRecording && !isUploading && !showSuccess && (
+              <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/25">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="text-xs text-emerald-400/80 font-medium">已录制</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Quality issues */}
+        <AnimatePresence>
+          {qualityCheck && !qualityCheck.passed && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mb-3 p-2.5 rounded-lg bg-red-500/8 border border-red-500/25"
             >
-              <Trash2 className="w-4 h-4" />
-            </button>
+              <div className="flex items-center gap-2 mb-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
+                <span className="text-xs font-semibold text-red-300">质量检查未通过，请重新录音</span>
+              </div>
+              <ul className="space-y-0.5 pl-5">
+                {(qualityCheck.issues || []).slice(0, 3).map((issue, i) => (
+                  <li key={i} className="text-[11px] text-red-300/70 list-disc">{issue}</li>
+                ))}
+              </ul>
+            </motion.div>
           )}
-        </div>
-      </div>
+        </AnimatePresence>
 
-      {/* Quality Issues */}
-      {qualityCheck && !qualityCheck.passed && (
-        <div className="mb-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-700 rounded-md">
-          <p className="text-xs font-bold text-red-800 dark:text-red-200 mb-1">检测到以下问题，请重新录音：</p>
-          <ul className="text-xs text-red-700 dark:text-red-300 list-disc list-inside ml-2 space-y-1">
-            {qualityCheck.issues.map((issue, i) => (
-              <li key={i}>{issue}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+        {/* Waveform visualizer during recording */}
+        <AnimatePresence>
+          {isRecording && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 48 }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mb-3 overflow-hidden rounded-lg"
+            >
+              <WaveformVisualizer analyser={analyserRef.current} isRecording={isRecording} />
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-      {/* Quality Success */}
-      {qualityCheck && qualityCheck.passed && (
-        <div className="mb-3 p-3 bg-green-50 dark:bg-green-900/20 border border-green-300 dark:border-green-700 rounded-md">
-          <p className="text-xs font-bold text-green-800 dark:text-green-200">录音质量检查通过，已保存</p>
-        </div>
-      )}
-
-      {/* Recording Controls */}
-      <div className="flex items-center gap-2">
-        {!hasRecording ? (
-          <>
-            {isRecording ? (
-              <>
+        {/* Controls row */}
+        <div className="flex items-center gap-2">
+          {/* Main action button */}
+          {!hasRecording && (
+            <>
+              {isRecording ? (
                 <button
                   onClick={handleStopRecording}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-md text-sm transition-colors"
+                  className="group/btn flex items-center gap-2 px-4 py-2 rounded-xl bg-red-500/15 border border-red-500/40 text-red-400 hover:bg-red-500/25 hover:border-red-500/60 transition-all duration-200 active:scale-95"
                 >
-                  <Square className="w-4 h-4" />
-                  <span>停止</span>
-                  <span className="ml-1 font-mono">{formatTime(recordingTime)}</span>
+                  <div className="w-2 h-2 rounded-sm bg-red-500 group-hover/btn:scale-110 transition-transform" />
+                  <span className="text-xs font-semibold">停止</span>
+                  <span className="font-mono text-xs text-red-400/70 ml-1">{formatTime(recordingTime)}</span>
                 </button>
-                <span className="text-xs text-red-500 animate-pulse">录音中...</span>
-              </>
-            ) : (
-              <button
-                onClick={handleStartRecording}
-                className="flex items-center gap-1 px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-md text-sm transition-colors"
-              >
-                <Mic className="w-4 h-4" />
-                <span>录音</span>
-              </button>
-            )}
-          </>
-        ) : (
-          <>
-            <button
-              onClick={handlePlay}
-              className="flex items-center gap-1 px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-md text-sm transition-colors"
-            >
-              <Play className="w-4 h-4" />
-              <span>{isPlaying ? '暂停' : '播放'}</span>
-            </button>
-            <button
-              onClick={handleDeleteRecording}
-              className="flex items-center gap-1 px-3 py-1.5 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-md text-sm transition-colors"
-            >
-              <Trash2 className="w-4 h-4" />
-              <span>重录</span>
-            </button>
-          </>
-        )}
-        {canEdit && (
-          <>
-            {isEditing ? (
-              <>
+              ) : (
                 <button
-                  onClick={handleSaveEdit}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-md text-sm transition-colors"
+                  onClick={handleStartRecording}
+                  disabled={isUploading}
+                  className="group/btn flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 hover:border-amber-500/60 hover:shadow-amber-500/20 hover:shadow-lg transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Check className="w-4 h-4" />
-                  <span>保存</span>
+                  <Mic className="w-4 h-4" />
+                  <span className="text-xs font-semibold">录音</span>
                 </button>
-                <button
-                  onClick={handleCancelEdit}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-md text-sm transition-colors"
-                >
-                  <X className="w-4 h-4" />
-                  <span>取消</span>
-                </button>
-              </>
-            ) : (
+              )}
+            </>
+          )}
+
+          {/* Post-recording controls */}
+          {hasRecording && !isUploading && (
+            <>
               <button
-                onClick={handleEdit}
-                className="flex items-center gap-1 px-3 py-1.5 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-md text-sm transition-colors"
-                title="编辑话术"
+                onClick={handlePlay}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-500/50 transition-all duration-200 active:scale-95"
               >
-                <Edit2 className="w-4 h-4" />
-                <span>编辑</span>
+                {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                <span className="text-xs font-semibold">{isPlaying ? '暂停' : '播放'}</span>
               </button>
-            )}
-          </>
-        )}
+              <button
+                onClick={handleDeleteRecording}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl bg-studio-bg border border-studio-border text-slate-500 hover:border-red-500/40 hover:text-red-400 transition-all duration-200 active:scale-95"
+                title="重新录音"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </>
+          )}
+
+          {/* Edit controls */}
+          {canEdit && (
+            <>
+              {isEditing ? (
+                <>
+                  <button
+                    onClick={() => { onTextChange?.(index, editedText); setIsEditing(false); }}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-cyan-500/15 border border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/25 transition-all active:scale-95"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span className="text-xs font-semibold">保存</span>
+                  </button>
+                  <button
+                    onClick={() => { setEditedText(text); setIsEditing(false); }}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-studio-bg border border-studio-border text-slate-500 hover:text-slate-300 transition-all active:scale-95"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-studio-bg border border-studio-border text-slate-600 hover:border-studio-border-light hover:text-slate-400 transition-all opacity-0 group-hover:opacity-100 active:scale-95"
+                  title="编辑话术"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </>
+          )}
+
+          {/* Delete card */}
+          {canEdit && onDelete && (
+            <button
+              onClick={() => onDelete(index)}
+              className="ml-auto flex items-center gap-1.5 px-2.5 py-2 rounded-xl text-slate-600 hover:text-red-400 hover:bg-red-500/5 transition-all opacity-0 group-hover:opacity-100 active:scale-95"
+              title="删除话术"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Hidden audio element for playback */}
+      {/* Hidden audio */}
       {audioUrl && (
         <audio
           ref={audioRef}
           src={audioUrl}
-          onEnded={handleAudioEnded}
+          onEnded={() => setIsPlaying(false)}
           className="hidden"
         />
       )}
-    </div>
+    </motion.div>
   );
 }
