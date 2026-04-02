@@ -138,6 +138,7 @@ export default function RecordingCard({
 
         try {
           const webmBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          if (webmBlob.size === 0) throw new Error('录音数据为空，请重试');
           const wavBlob = await convertToWav(webmBlob);
 
           const formData = new FormData();
@@ -195,7 +196,7 @@ export default function RecordingCard({
       };
       setTimeout(() => { if (isRecordingRef.current) requestAnimationFrame(silenceDetect); }, 200);
 
-      mediaRecorder.start();
+      mediaRecorder.start(1000); // collect data every 1 second to prevent buffer overflow
       isRecordingRef.current = true;
       setIsRecording(true);
       setHasRecording(false);
