@@ -1,41 +1,42 @@
-# Dependencies
-frontend/node_modules/
-backend/__pycache__/
-backend/*.pyc
-backend/.pytest_cache/
-
-# Environment variables
-backend/.env
+# Environment variables (API keys, secrets)
 .env
 .env.local
 .env.*.local
 
-# Data files (recordings)
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Data (audio recordings, CSVs, zip exports)
 data/wavs/
+data/*.csv
 data/*.zip
-data/metadata.csv
 
 # IDE
-.vscode/
 .idea/
+.vscode/
 *.swp
 *.swo
-*~
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Build
-frontend/dist/
-frontend/build/
-
-# Temporary files
-*.tmp
-*.temp
+# Build artifacts
+*.egg-info/
