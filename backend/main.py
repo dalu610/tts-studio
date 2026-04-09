@@ -151,7 +151,6 @@ def check_audio_quality(audio_data: bytes, text: str) -> QualityCheckResult:
     Check audio quality based on:
     1. Duration check - estimate reasonable duration based on text length
     2. Volume check - detect silence or too quiet audio
-    3. Clipping check - detect if audio peaked at max value
     """
     issues = []
 
@@ -192,12 +191,6 @@ def check_audio_quality(audio_data: bytes, text: str) -> QualityCheckResult:
         # Increased threshold from 0.01 to 0.05 to avoid false positives from ambient noise
         if normalized_rms < 0.05:  # Higher threshold for TTS training quality
             issues.append(f"音量过低（RMS: {normalized_rms:.4f}），请确保麦克风正常工作并大声朗读")
-
-        # 3. Clipping check (relaxed threshold)
-        # Check if audio reached max value (clipping) - only warn if many samples clip
-        clipping_threshold = 32750  # Very close to max int16 value (32767)
-        if max_amplitude >= clipping_threshold:
-            issues.append("检测到爆音（波形超过安全阈值），请调整麦克风音量后重录")
 
         logger.info(f"Quality check: duration={duration:.2f}s, text_len={len(text)}, rms={normalized_rms:.6f}, max_amp={max_amplitude}, issues={issues}")
         if issues:
