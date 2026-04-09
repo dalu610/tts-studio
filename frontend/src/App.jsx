@@ -6,8 +6,7 @@ import WorkZone from './components/WorkZone';
 import ManagementPanel from './components/ManagementPanel';
 
 function App() {
-  const [variants, setVariants] = useState([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [texts, setTexts] = useState([]);
   const [showManagement, setShowManagement] = useState(false);
   const [mounted, setMounted] = useState(false);
   // 统一管理已完成的录音 ID
@@ -17,32 +16,9 @@ function App() {
     setMounted(true);
   }, []);
 
-  const handleGenerate = async (seedText) => {
-    setIsLoading(true);
-    try {
-      const response = await fetch('/api/expand-text', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ seed_text: seedText, count: 15 }),
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setVariants(data.variants || []);
-      }
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleVariantsChange = (index, newText, isDelete = false) => {
-    setVariants((prev) => {
-      const newVariants = [...prev];
-      if (isDelete) newVariants.splice(index, 1);
-      else newVariants[index] = newText;
-      return newVariants;
-    });
+  const handleExcelUpload = (uploadedTexts) => {
+    setTexts(uploadedTexts);
+    setCompletedIds(new Set());
   };
 
   // 录音完成/删除时同步 completedIds
@@ -52,11 +28,6 @@ function App() {
       completed ? next.add(filename) : next.delete(filename);
       return next;
     });
-  };
-
-  const handleExcelUpload = (texts) => {
-    setVariants(texts);
-    setCompletedIds(new Set());
   };
 
   return (
@@ -113,8 +84,8 @@ function App() {
           >
             <div className="flex items-center gap-2 px-3">
               <Radio className="w-3.5 h-3.5 text-amber-500" />
-              <span className="text-xs text-slate-400">变体</span>
-              <span className="font-mono font-medium text-amber-400 text-sm">{variants.length}</span>
+              <span className="text-xs text-slate-400">话术</span>
+              <span className="font-mono font-medium text-amber-400 text-sm">{texts.length}</span>
             </div>
             <div className="w-px h-5 bg-studio-border" />
             <div className="flex items-center gap-2 px-3">
@@ -153,8 +124,6 @@ function App() {
             className="lg:col-span-2 studio-panel p-5 flex flex-col overflow-hidden"
           >
             <InputZone
-              onGenerate={handleGenerate}
-              isLoading={isLoading}
               onExcelUpload={handleExcelUpload}
             />
           </motion.div>
@@ -167,10 +136,8 @@ function App() {
             className="lg:col-span-3 studio-panel p-5 flex flex-col overflow-hidden"
           >
             <WorkZone
-              variants={variants}
-              isLoading={isLoading}
+              texts={texts}
               completedIds={completedIds}
-              onVariantsChange={handleVariantsChange}
               onRecordingComplete={handleRecordingComplete}
             />
           </motion.div>

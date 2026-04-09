@@ -4,23 +4,16 @@ import RecordingCard from './RecordingCard';
 import LoadingSkeleton from './LoadingSkeleton';
 
 export default function WorkZone({
-  variants,
-  isLoading,
+  texts,
   completedIds,
-  onVariantsChange,
   onRecordingComplete,
 }) {
   const completedCount = completedIds.size;
-  const totalCount = variants.length;
+  const totalCount = texts.length;
   const progressPct = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
 
   const handleRecordingComplete = (index, completed) => {
-    // Use index as the key since variants are stable
     onRecordingComplete?.(String(index), completed);
-  };
-
-  const handleDeleteVariant = (index) => {
-    onVariantsChange?.(index, null, true);
   };
 
   return (
@@ -30,7 +23,7 @@ export default function WorkZone({
         <div className="flex items-center gap-3">
           <div className="w-1 h-5 bg-gradient-to-b from-cyan-500 to-cyan-600 rounded-full" />
           <h2 className="font-display font-semibold text-base text-white tracking-tight">
-            话术变体
+            录音任务
           </h2>
           {totalCount > 0 && (
             <div className="flex items-center gap-2 bg-studio-bg border border-studio-border rounded-xl px-3 py-1">
@@ -60,19 +53,15 @@ export default function WorkZone({
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto min-h-0 pr-0.5">
-        {isLoading ? (
-          <LoadingSkeleton count={15} />
-        ) : variants.length > 0 ? (
+        {texts.length > 0 ? (
           <div className="space-y-3">
-            {variants.map((text, index) => (
+            {texts.map((text, index) => (
               <RecordingCard
                 key={`${text}-${index}`}
                 text={text}
                 index={index}
                 isRecorded={completedIds.has(String(index))}
                 onRecordingComplete={handleRecordingComplete}
-                onTextChange={(idx, newText) => onVariantsChange?.(idx, newText)}
-                onDelete={handleDeleteVariant}
               />
             ))}
           </div>
@@ -94,10 +83,10 @@ function EmptyState() {
         <div className="absolute inset-0 rounded-3xl border border-dashed border-studio-border -z-10 scale-125" />
       </div>
       <h3 className="font-display font-semibold text-slate-400 text-base mb-2">
-        还没有话术变体
+        还没有录音任务
       </h3>
       <p className="text-slate-600 text-sm max-w-[240px] leading-relaxed">
-        在左侧输入种子话术或导入 Excel 文件，即可开始创建录音数据集
+        在左侧导入 Excel 文件，即可开始创建录音数据集
       </p>
       <div className="flex items-center gap-1.5 mt-8">
         {[0, 1, 2].map((i) => (
