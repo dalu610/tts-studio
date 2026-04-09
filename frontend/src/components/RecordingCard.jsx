@@ -146,7 +146,14 @@ export default function RecordingCard({
           formData.append('text', editedText);
           formData.append('index', index);
 
-          const uploadRes = await fetch('/api/upload-audio', { method: 'POST', body: formData });
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 60000);
+          const uploadRes = await fetch('/api/upload-audio', {
+            method: 'POST',
+            body: formData,
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
 
           if (!uploadRes.ok) throw new Error('Upload failed');
           const uploadData = await uploadRes.json();
