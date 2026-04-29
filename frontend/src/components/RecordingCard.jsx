@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Mic, Square, Play, Pause, Trash2, CheckCircle, Edit2, X, AlertTriangle, Check } from 'lucide-react';
+import { Mic, Play, Pause, Trash2, CheckCircle, Edit2, X, AlertTriangle, Check, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { convertToWav } from '../utils/audioUtils';
 
@@ -86,7 +86,9 @@ export default function RecordingCard({
   const [editedText, setEditedText] = useState(text);
   const [qualityCheck, setQualityCheck] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [currentFilename, setCurrentFilename] = useState(null);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -159,11 +161,13 @@ export default function RecordingCard({
           const uploadData = await uploadRes.json();
 
           const url = URL.createObjectURL(wavBlob);
+          if (audioUrl) URL.revokeObjectURL(audioUrl);
           setAudioUrl(url);
+          setCurrentFilename(uploadData.filename);
           setHasRecording(true);
           setShowSuccess(true);
           setTimeout(() => setShowSuccess(false), 3000);
-          onRecordingComplete?.(index, true);
+          onRecordingComplete?.(index, true, uploadData.filename);
 
           // Quality check
           const ab = await wavBlob.arrayBuffer();
@@ -250,12 +254,52 @@ export default function RecordingCard({
     else { audioRef.current.play(); setIsPlaying(true); }
   };
 
-  const handleDeleteRecording = async () => {
+  const deleteSavedRecording = async () => {
+    if (!currentFilename) return true;
+
+    const formData = new FormData();
+    formData.append('filename', currentFilename);
+
+    try {
+      const res = await fetch('/api/delete-audio', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) throw new Error('Delete failed');
+      return true;
+    } catch (err) {
+      alert('删除录音文件失败，请稍后重试');
+      return false;
+    }
+  };
+
+  const clearLocalRecording = () => {
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     setAudioUrl(null);
+    setCurrentFilename(null);
     setHasRecording(false);
     setQualityCheck(null);
+    setIsPlaying(false);
     onRecordingComplete?.(index, false);
+  };
+
+  const handleDeleteRecording = async () => {
+    setIsDeleting(true);
+    const deleted = await deleteSavedRecording();
+    if (deleted) clearLocalRecording();
+    setIsDeleting(false);
+  };
+
+  const handleRerecord = async () => {
+    setIsDeleting(true);
+    const deleted = await deleteSavedRecording();
+    if (deleted) {
+      clearLocalRecording();
+      setIsDeleting(false);
+      await handleStartRecording();
+      return;
+    }
+    setIsDeleting(false);
   };
 
   const cardVariants = {
@@ -424,15 +468,26 @@ export default function RecordingCard({
             <>
               <button
                 onClick={handlePlay}
+                disabled={isDeleting}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-500/50 transition-all duration-200 active:scale-95"
               >
                 {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                 <span className="text-xs font-semibold">{isPlaying ? '暂停' : '播放'}</span>
               </button>
               <button
-                onClick={handleDeleteRecording}
-                className="flex items-center gap-2 px-3 py-2 rounded-xl bg-studio-bg border border-studio-border text-slate-500 hover:border-red-500/40 hover:text-red-400 transition-all duration-200 active:scale-95"
+                onClick={handleRerecord}
+                disabled={isDeleting}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 hover:border-amber-500/50 transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 title="重新录音"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span className="text-xs font-semibold">{isDeleting ? '处理中' : '重新录制'}</span>
+              </button>
+              <button
+                onClick={handleDeleteRecording}
+                disabled={isDeleting}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl bg-studio-bg border border-studio-border text-slate-500 hover:border-red-500/40 hover:text-red-400 transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="删除录音"
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>

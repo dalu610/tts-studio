@@ -12,8 +12,8 @@ export default function WorkZone({
   const totalCount = texts.length;
   const progressPct = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
 
-  const handleRecordingComplete = (index, completed) => {
-    onRecordingComplete?.(String(index), completed);
+  const handleRecordingComplete = (index, completed, filename) => {
+    onRecordingComplete?.(String(index), completed, filename);
   };
 
   return (

@@ -22,15 +22,37 @@ export default function ManagementPanel({ isOpen, onClose, onRecordingsChange })
     setLoading(true);
     try {
       const res = await fetch('/api/recordings');
-      if (res.ok) setRecordings((await res.json()).recordings || []);
+      if (res.ok) {
+        const data = await res.json();
+        setRecordings(sortRecordings(data.recordings || []));
+      }
     } catch {} finally {
       setLoading(false);
     }
   };
 
+  const getRecordingTime = (recording) => {
+    if (recording.uploaded_at_display) return recording.uploaded_at_display;
+    const raw = recording.timestamp || '';
+    const match = raw.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+    if (!match) return '-';
+    return `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}:${match[6]}`;
+  };
+
+  const getSortTime = (recording) => {
+    if (recording.uploaded_at) return new Date(recording.uploaded_at).getTime();
+    const raw = recording.timestamp || '';
+    const match = raw.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+    if (!match) return 0;
+    return new Date(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}`).getTime();
+  };
+
+  const sortRecordings = (items) => [...items].sort((a, b) => getSortTime(b) - getSortTime(a));
+
   const filtered = recordings.filter((r) =>
     r.text?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    r.filename?.toLowerCase().includes(searchQuery.toLowerCase())
+    r.filename?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    getRecordingTime(r).toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const handleSelectAll = () => {
@@ -254,6 +276,7 @@ export default function ManagementPanel({ isOpen, onClose, onRecordingsChange })
                 <tr className="border-b border-studio-border">
                   <th className="w-10 px-4 py-2" />
                   <th className="text-left px-4 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">话术文本</th>
+                  <th className="w-40 text-left px-4 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider hidden lg:table-cell">上传时间</th>
                   <th className="w-28 text-left px-4 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider hidden md:table-cell">文件名</th>
                   <th className="w-28 px-4 py-2" />
                 </tr>
@@ -287,6 +310,9 @@ export default function ManagementPanel({ isOpen, onClose, onRecordingsChange })
                           {recording.text}
                         </span>
                       </div>
+                    </td>
+                    <td className="px-4 py-3 hidden lg:table-cell">
+                      <span className="font-mono text-[11px] text-slate-500">{getRecordingTime(recording)}</span>
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell">
                       <span className="font-mono text-[11px] text-slate-600">{recording.filename}</span>

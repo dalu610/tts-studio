@@ -26,6 +26,7 @@ DATA_DIR = Path("data")
 WAVS_DIR = DATA_DIR / "wavs"
 METADATA_FILE = DATA_DIR / "metadata.csv"
 ZIP_FILE = DATA_DIR / "dataset.zip"
+METADATA_FIELDS = ["filename", "text", "timestamp", "index"]
 
 # Ensure directories exist
 WAVS_DIR.mkdir(parents=True, exist_ok=True)
@@ -55,6 +56,64 @@ class QualityCheckRequest(BaseModel):
 class QualityCheckResult(BaseModel):
     passed: bool
     issues: List[str]
+
+
+def safe_audio_path(filename: str) -> Path:
+    """
+    Resolve an audio filename inside WAVS_DIR only.
+    """
+    if Path(filename).name != filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    return WAVS_DIR / filename
+
+
+def parse_timestamp(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    for fmt in ("%Y%m%d_%H%M%S", "%Y%m%d_%H%M%S_%f"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def format_uploaded_at(timestamp: str, filepath: Optional[Path] = None) -> tuple[str, str]:
+    dt = parse_timestamp(timestamp)
+    if not dt and filepath and filepath.exists():
+        dt = datetime.fromtimestamp(filepath.stat().st_mtime)
+    if not dt:
+        return "", ""
+    return dt.isoformat(timespec="seconds"), dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+async def read_metadata() -> List[dict]:
+    if not METADATA_FILE.exists():
+        return []
+    async with aiofiles.open(METADATA_FILE, mode="r", encoding="utf-8", newline="") as f:
+        content = await f.read()
+    if not content.strip():
+        return []
+    return list(csv.DictReader(content.splitlines()))
+
+
+async def write_metadata(records: List[dict]) -> None:
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=METADATA_FIELDS, extrasaction="ignore")
+    writer.writeheader()
+    for record in records:
+        writer.writerow({field: record.get(field, "") for field in METADATA_FIELDS})
+    async with aiofiles.open(METADATA_FILE, mode="w", encoding="utf-8", newline="") as f:
+        await f.write(output.getvalue())
+
+
+def metadata_csv(records: List[dict]) -> str:
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=METADATA_FIELDS, extrasaction="ignore")
+    writer.writeheader()
+    for record in records:
+        writer.writerow({field: record.get(field, "") for field in METADATA_FIELDS})
+    return output.getvalue()
 
 
 def check_audio_quality(audio_data: bytes, text: str) -> QualityCheckResult:
@@ -165,19 +224,14 @@ async def upload_audio(
 
     # Save metadata to CSV
     try:
-        # Check if file exists and has a header
-        has_header = False
-        if METADATA_FILE.exists():
-            async with aiofiles.open(METADATA_FILE, mode="r", encoding="utf-8", newline="") as f:
-                first_line = await f.readline()
-                has_header = first_line.strip().startswith("filename")
-
-        async with aiofiles.open(METADATA_FILE, mode="a", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f)
-            if not has_header:
-                # Write header if file doesn't have one
-                await f.write("filename,text,timestamp,index\n")
-            await f.write(f"{filename},{text},{timestamp},{index}\n")
+        records = await read_metadata()
+        records.append({
+            "filename": filename,
+            "text": text,
+            "timestamp": timestamp,
+            "index": str(index),
+        })
+        await write_metadata(records)
 
         logger.info(f"Successfully saved: {filename} for text: {text[:20]}...")
     except Exception as e:
@@ -195,35 +249,22 @@ async def delete_audio(filename: str = Form(...)):
     """
     Delete an audio file and its metadata entry.
     """
-    filepath = WAVS_DIR / filename
-
-    if not filepath.exists():
-        raise HTTPException(status_code=404, detail="File not found")
+    filepath = safe_audio_path(filename)
 
     # Delete audio file
     try:
-        filepath.unlink()
+        if filepath.exists():
+            filepath.unlink()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete audio: {str(e)}")
 
     # Remove from metadata (read, filter, rewrite)
     try:
-        records = []
-        if METADATA_FILE.exists():
-            async with aiofiles.open(METADATA_FILE, mode="r", encoding="utf-8", newline="") as f:
-                content = await f.read()
-                reader = csv.DictReader(content.splitlines())
-                for row in reader:
-                    if row["filename"] != filename:
-                        records.append(row)
-
-        # Rewrite CSV
-        async with aiofiles.open(METADATA_FILE, mode="w", encoding="utf-8", newline="") as f:
-            if records:
-                writer = csv.DictWriter(f, fieldnames=["filename", "text", "timestamp", "index"])
-                await f.write("filename,text,timestamp,index\n")
-                for record in records:
-                    await f.write(f"{record['filename']},{record['text']},{record['timestamp']},{record['index']}\n")
+        records = [
+            row for row in await read_metadata()
+            if row.get("filename") != filename
+        ]
+        await write_metadata(records)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to update metadata: {str(e)}")
 
@@ -236,12 +277,23 @@ async def get_recordings():
     Get list of all recordings with metadata.
     """
     recordings = []
-    if METADATA_FILE.exists():
-        async with aiofiles.open(METADATA_FILE, mode="r", encoding="utf-8", newline="") as f:
-            content = await f.read()
-            reader = csv.DictReader(content.splitlines())
-            for row in reader:
-                recordings.append(row)
+    for row in await read_metadata():
+        filename = row.get("filename", "")
+        if not filename:
+            continue
+        filepath = WAVS_DIR / filename
+        uploaded_at, uploaded_at_display = format_uploaded_at(row.get("timestamp", ""), filepath)
+        recordings.append({
+            **row,
+            "uploaded_at": uploaded_at,
+            "uploaded_at_display": uploaded_at_display,
+            "exists": filepath.exists(),
+        })
+
+    recordings.sort(
+        key=lambda row: row.get("uploaded_at") or row.get("timestamp") or "",
+        reverse=True,
+    )
 
     return {"recordings": recordings}
 
@@ -251,7 +303,7 @@ async def get_audio(filename: str):
     """
     Serve audio file for playback.
     """
-    filepath = WAVS_DIR / filename
+    filepath = safe_audio_path(filename)
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(path=filepath, media_type="audio/wav")
@@ -266,7 +318,7 @@ async def export_dataset(request: ExportRequest = None):
     # Determine which files to export
     files_to_export = []
     if request and request.files:
-        files_to_export = [WAVS_DIR / f for f in request.files]
+        files_to_export = [safe_audio_path(f) for f in request.files]
     else:
         files_to_export = list(WAVS_DIR.glob("*.wav"))
 
@@ -276,14 +328,10 @@ async def export_dataset(request: ExportRequest = None):
     # Create ZIP file
     try:
         # Read metadata
-        metadata_records = []
-        if METADATA_FILE.exists():
-            async with aiofiles.open(METADATA_FILE, mode="r", encoding="utf-8", newline="") as f:
-                content = await f.read()
-                reader = csv.DictReader(content.splitlines())
-                for row in reader:
-                    if not request or not request.files or row["filename"] in request.files:
-                        metadata_records.append(row)
+        metadata_records = [
+            row for row in await read_metadata()
+            if not request or not request.files or row.get("filename") in request.files
+        ]
 
         with zipfile.ZipFile(ZIP_FILE, "w", zipfile.ZIP_DEFLATED) as zipf:
             # Add selected WAV files
@@ -293,10 +341,7 @@ async def export_dataset(request: ExportRequest = None):
 
             # Add filtered metadata CSV
             if metadata_records:
-                metadata_content = "filename,text,timestamp,index\n"
-                for record in metadata_records:
-                    metadata_content += f"{record['filename']},{record['text']},{record['timestamp']},{record['index']}\n"
-                zipf.writestr(METADATA_FILE.name, metadata_content)
+                zipf.writestr(METADATA_FILE.name, metadata_csv(metadata_records))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create ZIP: {str(e)}")
 
